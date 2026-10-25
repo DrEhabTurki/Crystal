@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root{--orange:#ff9800;--bg:#101114;--panel:#1c1e23;--line:#363940;--text:#f5f5f5;--muted:#b6bac4}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Arial,Tahoma,sans-serif}
+    header{padding:18px 16px;background:#050505;border-bottom:3px solid var(--orange);position:sticky;top:0;z-index:3}
+    h1{font-size:21px;margin:0 0 6px}header p{margin:0;color:var(--muted);font-size:13px}
+    main{padding:14px;max-width:1100px;margin:auto}.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+    button,select,input{font:inherit;border-radius:9px;border:1px solid var(--line);padding:11px;background:#252830;color:var(--text)}
+    button{cursor:pointer}button.primary{background:var(--orange);border-color:var(--orange);color:#161616;font-weight:bold}
+    button:disabled{opacity:.45;cursor:not-allowed}.status{color:var(--muted);font-size:13px;margin:10px 0}
+    .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px;margin:12px 0}
+    .card h2{font-size:17px;margin:0 0 12px}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:10px}
+    table{border-collapse:collapse;width:100%;min-width:760px}th,td{padding:9px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+    th{background:var(--orange);color:#111;position:sticky;top:0}td input{width:125px;padding:8px;background:#111}
+    .readonly{color:#d6d8de}.actions{display:flex;gap:6px}.tag{display:inline-block;padding:4px 8px;border-radius:20px;background:#30333a;color:#ddd;font-size:12px}
+    .report-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}.report-item{padding:10px;background:#111;border:1px solid var(--line);border-radius:8px;min-height:64px}
+    .report-item strong{display:block;color:var(--orange);font-size:12px;margin-bottom:7px}.report-item span{overflow-wrap:anywhere}
+    .modal{position:fixed;inset:0;background:#000b;display:none;align-items:center;justify-content:center;padding:16px;z-index:5}.modal.show{display:flex}.modal-box{background:var(--panel);border:1px solid var(--line);padding:18px;border-radius:14px;width:min(440px,100%)}
+    .modal-box label{display:block;margin:12px 0 6px}.modal-box input{width:100%}.hint{font-size:12px;color:var(--muted);line-height:1.6}
+  </style>
+</head>
+<body>
+<header><h1>برنامج المطالبات الشهرية</h1><p id="subtitle">جاري الاتصال بشيت Google…</p></header>
+<main>
+  <div class="toolbar">
+    <label for="monthSelect">الشهر:</label><select id="monthSelect" aria-label="اختيار الشهر"></select>
+    <button id="refreshBtn">تحديث البيانات</button>
+    <button id="newMonthBtn" class="primary">بدء شهر جديد</button>
+  </div>
+  <div class="status" id="status">جاري تحميل البيانات…</div>
+  <section class="card"><h2>سجل المطالبات <span id="modeTag" class="tag">الشهر الحالي</span></h2>
+    <div class="table-wrap"><table id="registerTable"><thead></thead><tbody></tbody></table></div>
+    <p class="hint">المتاح تعديله فقط: الكود، الفاتورة، المستورد، المستلزمات، تاريخ الروشتة، تاريخ الصرف. باقي الأعمدة للعرض فقط.</p>
+  </section>
+  <section class="card"><h2>تقرير الشهر — للعرض فقط</h2><div id="report" class="report-grid"></div></section>
+</main>
+<div class="modal" id="monthModal"><div class="modal-box">
+  <h2>بدء شهر جديد</h2><p class="hint">سيتم حفظ نسخة من register وreport للشهر الحالي قبل تفريغ خانات الإدخال فقط. لا يمكن التراجع تلقائيًا عن بدء الشهر، لذلك راجع الشهر المختار جيدًا.</p>
+  <label for="newMonth">الشهر الجديد</label><input type="month" id="newMonth">
+  <div class="toolbar" style="margin-top:16px"><button class="primary" id="confirmNewMonth">تأكيد وأرشفة</button><button id="cancelNewMonth">إلغاء</button></div>
+</div></div>
+<script>
+  let appData=null, selectedMonth='', activeMonth='', archivedMonths=[];
+  const $=id=>document.getElementById(id);
+  const editable=new Set([2,3,6,7,9,10]);
+  function setStatus(s){$('status').textContent=s}
+  function callServer(fn,...args){return new Promise((resolve,reject)=>{const runner=google.script.run.withSuccessHandler(resolve).withFailureHandler(e=>reject(new Error(e.message||String(e))));runner[fn](...args);})}
+  async function loadInitial(){
+    try{appData=await callServer('getInitialData');activeMonth=appData.currentMonth;archivedMonths=appData.months||[];
+      $('subtitle').textContent=appData.spreadsheetName+' • مزامنة مع Google Sheets';
+      renderMonthOptions();selectedMonth=activeMonth;$('monthSelect').value=activeMonth;await loadSelected();
+    }catch(e){setStatus('تعذر تحميل البيانات: '+e.message)}
+  }
+  function renderMonthOptions(){
+    const sel=$('monthSelect');sel.innerHTML='';
+    const all=[activeMonth,...archivedMonths.filter(m=>m!==activeMonth)];
+    all.forEach(m=>{const o=document.createElement('option');o.value=m;o.textContent=m+(m===activeMonth?' — الحالي':' — أرشيف');sel.appendChild(o)});
+  }
+  async function loadSelected(){
+    selectedMonth=$('monthSelect').value;setStatus('جاري تحديث البيانات…');
+    try{
+      if(selectedMonth===activeMonth){appData=await callServer('getInitialData');}
+      else{appData=await callServer('getMonthData',selectedMonth);}
+      renderAll();setStatus('تم تحميل '+selectedMonth+' • آخر تحديث '+new Date().toLocaleTimeString('ar-EG'));
+    }catch(e){setStatus('تعذر تحميل البيانات: '+e.message)}
+  }
+  function renderAll(){
+    const archived=selectedMonth!==activeMonth;
+    $('modeTag').textContent=archived?'أرشيف — عرض فقط':'الشهر الحالي';
+    $('newMonthBtn').disabled=archived;
+    const table=$('registerTable'),thead=table.querySelector('thead'),tbody=table.querySelector('tbody');
+    thead.innerHTML='';tbody.innerHTML='';
+    const hr=document.createElement('tr');['رقم الصف',...(appData.headers||[])].forEach(h=>{const th=document.createElement('th');th.textContent=h;hr.appendChild(th)});thead.appendChild(hr);
+    (appData.rows||[]).forEach(item=>{
+      const tr=document.createElement('tr');const num=document.createElement('td');num.textContent=item.rowNumber;tr.appendChild(num);
+      item.values.forEach((value,i)=>{
+        const col=i+1,td=document.createElement('td');
+        if(!archived&&editable.has(col)){
+          const input=document.createElement('input');input.value=value??'';input.dataset.col=col;input.setAttribute('aria-label',(appData.headers[i]||('عمود '+col))+' صف '+item.rowNumber);td.appendChild(input);
+        }else{td.className='readonly';td.textContent=value??''}
+        tr.appendChild(td);
+      });
+      if(!archived){const td=document.createElement('td'),btn=document.createElement('button');btn.className='primary';btn.textContent='حفظ';btn.onclick=()=>saveRow(item.rowNumber,tr);td.appendChild(btn);tr.appendChild(td)}
+      tbody.appendChild(tr);
+    });
+    renderReport(appData.report);
+  }
+  async function saveRow(rowNumber,tr){
+    const values={};tr.querySelectorAll('input[data-col]').forEach(i=>values[i.dataset.col]=i.value);
+    const btn=tr.querySelector('button');btn.disabled=true;btn.textContent='حفظ…';
+    try{await callServer('saveRegisterRow',{rowNumber,month:selectedMonth,values});setStatus('تم حفظ الصف '+rowNumber+' في Google Sheets.');await loadSelected();}
+    catch(e){setStatus('فشل الحفظ: '+e.message);btn.disabled=false;btn.textContent='حفظ'}
+  }
+  function renderReport(report){
+    const box=$('report');box.innerHTML='';
+    if(!report||!report.values){box.textContent='لا توجد بيانات تقرير.';return}
+    report.values.forEach((row,r)=>{
+      row.forEach((v,c)=>{
+        if(String(v).trim()==='')return;
+        const item=document.createElement('div');item.className='report-item';
+        const label=document.createElement('strong');label.textContent=(c===0?'':('عمود '+(c+1)+' • '))+(r===0?'':('صف '+(r+1)));
+        const value=document.createElement('span');value.textContent=v;item.append(label,value);box.appendChild(item);
+      });
+    });
+  }
+  $('refreshBtn').onclick=loadSelected;
+  $('monthSelect').onchange=loadSelected;
+  $('newMonthBtn').onclick=()=>{$('newMonth').value='';$('monthModal').classList.add('show')};
+  $('cancelNewMonth').onclick=()=>$('monthModal').classList.remove('show');
+  $('confirmNewMonth').onclick=async()=>{
+    const m=$('newMonth').value;if(!m){setStatus('اختر الشهر الجديد أولًا.');return}
+    const btn=$('confirmNewMonth');btn.disabled=true;
+    try{const result=await callServer('startNewMonth',m);$('monthModal').classList.remove('show');setStatus(result.message||'اكتملت العملية.');await loadInitial();}
+    catch(e){setStatus('تعذر بدء الشهر: '+e.message)}
+    finally{btn.disabled=false}
+  };
+  loadInitial();
+</script>
+</body></html>
